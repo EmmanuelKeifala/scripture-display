@@ -11,7 +11,6 @@ import time
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.scripture_filter import filter_scripture_text
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -149,16 +148,11 @@ class WhisperTranscriber:
         
         full_text = ' '.join(text_parts).strip()
         
-        # Enhance and detect scripture references using the scripture filter
-        filtered_text = filter_scripture_text(full_text)
-        is_scripture = bool(filtered_text)
-
+        # Don't filter here; let the LLM classifier in processor.py decide
+        # Just return the raw transcription
         result = {
             # raw transcription
             'text': full_text,
-            # filtered/enhanced scripture-like text (empty if not scripture)
-            'filtered_text': filtered_text,
-            'is_scripture': is_scripture,
             'original_text': full_text,
             'language': info.language,
             'segments': segments_list,

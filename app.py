@@ -20,6 +20,9 @@ class ScriptureDisplayApp:
         self.control_panel = ControlPanel(self.root)
         self.display_window = DisplayWindow()
         
+        # Set the advance callback for auto-advance on auto-clear
+        self.display_window.on_advance_callback = self.advance_to_next_verse
+        
         self.control_panel.on_start_callback = self.start_listening
         self.control_panel.on_stop_callback = self.stop_listening
         self.control_panel.on_lookup_callback = self.manual_lookup
@@ -101,7 +104,9 @@ class ScriptureDisplayApp:
         confidence_threshold = self.control_panel.get_confidence_threshold()
         self.detector.set_confidence_threshold(confidence_threshold)
         
+        print(f"[process_transcription] Input text: '{text}'")
         references = self.detector.detect(text)
+        print(f"[process_transcription] detector.detect() returned: {references}")
         
         if references:
             self.control_panel.log_status(f"Detected {len(references)} reference(s) in: '{text[:50]}...'")
@@ -135,6 +140,28 @@ class ScriptureDisplayApp:
                         )
                 
                 break
+    
+    def advance_to_next_verse(self, book, chapter, next_verse, translation):
+        """
+        Advance to the next verse in the current scripture.
+        Called by display window when auto-clear timer expires.
+        If a new scripture is detected, this is interrupted.
+        """
+        try:
+            verse = self.lookup.get_verse(book, chapter, next_verse, translation)
+            if verse:
+                auto_clear = self.control_panel.get_auto_clear_seconds()
+                self.display_window.display_verse(verse, auto_clear)
+                self.display_window.show()
+                self.control_panel.log_status(f"Auto-advanced to: {book} {chapter}:{next_verse}")
+            else:
+                # Verse not found (end of chapter?), stop auto-advance
+                print(f"[DisplayWindow] Verse {book} {chapter}:{next_verse} not found, stopping auto-advance")
+                self.display_window.clear_display()
+                self.control_panel.log_status(f"End of available verses for {book} {chapter}")
+        except Exception as e:
+            print(f"[DisplayWindow] Error advancing verse: {e}")
+            self.display_window.clear_display()
     
     def clear_display(self):
         self.display_window.clear_display()

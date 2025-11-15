@@ -46,7 +46,13 @@ class DisplayWindow:
         
         self.auto_clear_after_id = None
         
-    def display_verse(self, verse_data, auto_clear_seconds=None):
+        # Track current scripture for auto-advance
+        self.current_scripture = None  # (book, chapter, start_verse, end_verse)
+        self.on_advance_callback = None  # Called to advance to next verse
+        
+    def display_verse(self, verse_data, auto_clear_seconds=None, on_advance_callback=None):
+        if on_advance_callback:
+            self.on_advance_callback = on_advance_callback
         if isinstance(verse_data, list):
             self._display_verse_range(verse_data, auto_clear_seconds)
         else:
@@ -64,6 +70,15 @@ class DisplayWindow:
         self.verse_text.config(state=tk.DISABLED)
         
         self.translation_label.config(text=verse['translation'])
+        
+        # Store current scripture for auto-advance
+        self.current_scripture = (
+            verse['book'],
+            verse['chapter'],
+            verse['verse'],
+            verse['verse'],
+            verse['translation']
+        )
         
         if auto_clear_seconds:
             self._schedule_auto_clear(auto_clear_seconds)
@@ -101,6 +116,9 @@ class DisplayWindow:
         if self.auto_clear_after_id:
             self.window.after_cancel(self.auto_clear_after_id)
             self.auto_clear_after_id = None
+        
+        # Reset current scripture when manually clearing
+        self.current_scripture = None
     
     def _schedule_auto_clear(self, seconds):
         if self.auto_clear_after_id:
@@ -108,8 +126,20 @@ class DisplayWindow:
         
         self.auto_clear_after_id = self.window.after(
             int(seconds * 1000),
-            self.clear_display
+            self._on_auto_clear
         )
+    
+    def _on_auto_clear(self):
+        """Called when auto-clear timer expires. Advances to next verse instead of clearing."""
+        if self.current_scripture and self.on_advance_callback:
+            book, chapter, start_verse, end_verse, translation = self.current_scripture
+            # Advance to next verse
+            next_verse = start_verse + 1
+            print(f"[DisplayWindow] Auto-advancing from {book} {chapter}:{start_verse} to {book} {chapter}:{next_verse}")
+            self.on_advance_callback(book, chapter, next_verse, translation)
+        else:
+            # No callback or no scripture tracked, just clear
+            self.clear_display()
     
     def toggle_fullscreen(self):
         current = self.window.attributes('-fullscreen')

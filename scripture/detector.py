@@ -38,6 +38,7 @@ class ScriptureDetector:
         book_pattern = '|'.join(re.escape(book) for book in self.book_patterns)
         
         self.patterns = [
+            # Standard format: "John 3:16" or "John 3:16-18"
             (
                 re.compile(
                     rf'\b({book_pattern})\s+(\d+):(\d+)(?:-(\d+))?\b',
@@ -46,6 +47,16 @@ class ScriptureDetector:
                 1.0,
                 'standard'
             ),
+            # LLM classifier output: "John 1" (chapter only, default to verse 1)
+            (
+                re.compile(
+                    rf'\b({book_pattern})\s+(\d+)\b(?!\s*:)',
+                    re.IGNORECASE
+                ),
+                0.95,
+                'chapter_only'
+            ),
+            # Spoken full: "John chapter 3 verse 16"
             (
                 re.compile(
                     rf'\b({book_pattern})\s+chapter\s+(\d+)\s+verse\s+(\d+)(?:\s+(?:through|to|thru)\s+(?:verse\s+)?(\d+))?\b',
@@ -54,6 +65,7 @@ class ScriptureDetector:
                 0.95,
                 'spoken_full'
             ),
+            # Spoken verses: "John chapter 3 verses 16-18"
             (
                 re.compile(
                     rf'\b({book_pattern})\s+chapter\s+(\d+)\s+verses?\s+(\d+)(?:\s+(?:through|to|thru)\s+(\d+))?\b',
@@ -62,6 +74,7 @@ class ScriptureDetector:
                 0.9,
                 'spoken_verses'
             ),
+            # "in the book of John 3:16"
             (
                 re.compile(
                     rf'\b(?:in\s+)?(?:the\s+book\s+of\s+)?({book_pattern})\s+(\d+):(\d+)(?:-(\d+))?\b',
@@ -70,6 +83,7 @@ class ScriptureDetector:
                 0.85,
                 'book_of'
             ),
+            # "Turn to John 3 verse 16"
             (
                 re.compile(
                     rf'\b(?:turn\s+to\s+)?({book_pattern})\s+(\d+)\s+verse\s+(\d+)(?:\s+(?:through|to)\s+(\d+))?\b',
@@ -90,9 +104,15 @@ class ScriptureDetector:
                 try:
                     book_raw = match.group(1)
                     chapter = int(match.group(2))
-                    start_verse = int(match.group(3))
-                    end_verse_str = match.group(4) if len(match.groups()) >= 4 else None
-                    end_verse = int(end_verse_str) if end_verse_str else start_verse
+                    
+                    # Handle chapter_only pattern (no verse specified, default to 1)
+                    if pattern_type == 'chapter_only':
+                        start_verse = 1
+                        end_verse = 1
+                    else:
+                        start_verse = int(match.group(3))
+                        end_verse_str = match.group(4) if len(match.groups()) >= 4 else None
+                        end_verse = int(end_verse_str) if end_verse_str else start_verse
                     
                     book_normalized = normalize_book_name(book_raw)
                     

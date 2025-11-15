@@ -1,7 +1,7 @@
 from audio.capture import AudioCapture
 from audio.transcribe import WhisperTranscriber
 from typing import Callable, Optional
-from utils.scripture_filter import filter_scripture_text
+from utils.scripture_classifier import classify_text
 
 class AudioProcessor:
     def __init__(self, model_size: str = 'base', transcription_callback: Optional[Callable] = None):
@@ -45,8 +45,8 @@ class AudioProcessor:
         except Exception:
             pass
 
-        # Only forward/display when detected as scripture
-        # keep recent raw chunks to allow cross-chunk detection (e.g. "John." + "Chapter 1")
+        # Use LLM to classify whether this is scripture
+        # keep recent raw chunks to allow cross-chunk detection
         try:
             if raw:
                 self._raw_buffer.append(raw.strip())
@@ -54,44 +54,62 @@ class AudioProcessor:
                 if len(self._raw_buffer) > self._raw_buffer_max:
                     self._raw_buffer = self._raw_buffer[-self._raw_buffer_max:]
 
-            # If the model already flagged this chunk as scripture, forward it
-            if self.transcription_callback and result and result.get('is_scripture'):
-                filtered = result.get('filtered_text', result.get('text', ''))
-                print(f"  [Model flagged as scripture] -> filtered: '{filtered}'")
+            # Try direct classification first (single chunk)
+            classification = classify_text(raw) if raw else None
+            
+            if classification and classification['is_scripture']:
+                filtered = classification['cleaned'] or classification['text']
+                print(f"  [LLM: SCRIPTURE] confidence={classification['confidence']:.2f} -> '{filtered}'")
+                print(f"  [DEBUG] Callback set: {self.transcription_callback is not None}")
+                
                 if filtered and filtered != self._last_displayed_filtered:
                     self._last_displayed_filtered = filtered
-                    self.transcription_callback(filtered, result)
-                    # clear buffer after a successful detection
-                    self._raw_buffer = []
-                return
-
-            # Attempt combined detection from recent raw chunks
-            combined = ' '.join([p for p in self._raw_buffer if p])
-            if combined:
-                combined_filtered = filter_scripture_text(combined)
-                # DEBUG: show what the filter decided
-                print(f"  [Combined attempt] buffer={self._raw_buffer} -> combined='{combined}'")
-                print(f"  [Combined attempt] filtered='{combined_filtered}'")
-                
-                if combined_filtered and combined_filtered != self._last_displayed_filtered:
-                    self._last_displayed_filtered = combined_filtered
-                    synthetic_result = {
-                        'text': combined,
-                        'filtered_text': combined_filtered,
-                        'is_scripture': True,
-                        'original_text': combined,
-                        'language': result.get('language') if result else 'en',
-                        'segments': [],
-                        'language_probability': 1.0
-                    }
+                    # Augment result with classification info
+                    result_with_class = dict(result) if result else {}
+                    result_with_class['is_scripture'] = True
+                    result_with_class['filtered_text'] = filtered
+                    result_with_class['llm_confidence'] = classification['confidence']
+                    
                     if self.transcription_callback:
-                        self.transcription_callback(combined_filtered, synthetic_result)
-                    # clear buffer after detection to avoid repeats
+                        print(f"  [INVOKING CALLBACK] with: '{filtered}'")
+                        self.transcription_callback(filtered, result_with_class)
+                    else:
+                        print(f"  [WARNING] No callback set!")
+                    # clear buffer after a successful detection (IMPORTANT: don't let sermon content accumulate)
                     self._raw_buffer = []
                     return
-        except Exception:
-            # Don't let detection errors break the pipeline
+                else:
+                    print(f"  [SKIPPED] Filtered same as last: '{filtered}' == '{self._last_displayed_filtered}'")
+
+            # If not scripture alone, try combined buffer
+            combined = ' '.join([p for p in self._raw_buffer if p])
+            if combined and combined != raw:
+                combined_classification = classify_text(combined)
+                print(f"  [LLM: COMBINED] '{combined}' -> is_scripture={combined_classification['is_scripture']}, confidence={combined_classification['confidence']:.2f}")
+                
+                if combined_classification['is_scripture']:
+                    filtered = combined_classification['cleaned'] or combined
+                    if filtered and filtered != self._last_displayed_filtered:
+                        self._last_displayed_filtered = filtered
+                        synthetic_result = {
+                            'text': combined,
+                            'filtered_text': filtered,
+                            'is_scripture': True,
+                            'original_text': combined,
+                            'language': result.get('language') if result else 'en',
+                            'segments': [],
+                            'language_probability': 1.0,
+                            'llm_confidence': combined_classification['confidence']
+                        }
+                        if self.transcription_callback:
+                            self.transcription_callback(filtered, synthetic_result)
+                        # clear buffer after detection to avoid repeats
+                        self._raw_buffer = []
+                        return
+        except Exception as e:
+            print(f"  [LLM classification error: {e}]")
             pass
+
     
     def start(self):
         if self.is_running:
