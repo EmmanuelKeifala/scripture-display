@@ -43,7 +43,7 @@ BOOK_NAMES = {
     'Luke': ['Luke', 'Luk', 'Lk'],
     'John': ['John', 'Joh', 'Jhn', 'Jn'],
     'Acts': ['Acts', 'Act', 'Ac'],
-    'Romans': ['Romans', 'Rom', 'Rm', 'Ro'],
+    'Romans': ['Romans', 'Rom', 'Rm', 'Ro', 'Roman'],
     '1 Corinthians': ['1 Corinthians', '1 Cor', '1 Co', '1Cor', '1Corinthians', 'I Corinthians', 'First Corinthians'],
     '2 Corinthians': ['2 Corinthians', '2 Cor', '2 Co', '2Cor', '2Corinthians', 'II Corinthians', 'Second Corinthians'],
     'Galatians': ['Galatians', 'Gal', 'Ga'],

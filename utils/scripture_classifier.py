@@ -34,16 +34,17 @@ class ScriptureClassifier:
             print(f"Failed to load classifier: {e}")
             self.classifier = None
     
-    def is_scripture_reference(self, text: str, threshold: float = 0.7) -> tuple:
+    def is_scripture_reference(self, text: str, threshold: float = 0.5) -> tuple:
         """
-        Determine if text is a scripture reference (not just Biblical content).
-        Uses TWO-STAGE filtering:
-        1. First check if it looks like an actual reference pattern (book + number)
-        2. If yes, use LLM to confirm; if no, reject immediately
+        Intelligently determine if text is scripture-related using context and intent.
+        Detects:
+        1. Explicit scripture references ("John 3:16", "Matthew chapter 5")
+        2. Scripture being read/quoted ("Blessed is the man who walks not...")
+        3. Contextual cues ("This is a reading of Psalms", "Turn to Romans")
         
         Args:
             text: The transcribed text to classify
-            threshold: Confidence threshold (0.0-1.0)
+            threshold: Confidence threshold (0.0-1.0), default lowered to 0.5 for flexibility
         
         Returns:
             (is_scripture: bool, confidence: float, explanation: str)
@@ -54,59 +55,116 @@ class ScriptureClassifier:
             return False, 0.0, "No text or classifier unavailable"
         
         text = text.strip()
-        if len(text) < 2:
+        if len(text) < 3:
             return False, 0.0, "Text too short"
         
         text_lower = text.lower()
         
-        # STAGE 1: Pattern matching — must look like a reference
-        # Check for patterns like: "book 1", "book 1:1", "book 1:1-5", "book chapter 1"
+        # Quick rejection filters for obvious non-scripture
+        rejection_phrases = [
+            'what is', 'alright but', 'welcome to', 'hello', 'hi everyone',
+            'good morning', 'good evening', 'thank you for', 'let me tell you',
+            'you know what', 'i hope you', 'don\'t you just', 'all right',
+            'the holy spirit is', 'holy spirit is', 'the spirit is'
+        ]
+        
+        # Check if text starts with obvious conversational phrases
+        for phrase in rejection_phrases:
+            if text_lower.startswith(phrase):
+                return False, 0.0, f"Starts with conversational phrase: '{phrase}'"
+        
+        # Bible book names including common misspellings and abbreviations
         bible_books = [
             'genesis', 'exodus', 'leviticus', 'numbers', 'deuteronomy', 'joshua', 'judges', 'ruth',
             'samuel', 'kings', 'chronicles', 'ezra', 'nehemiah', 'esther', 'job', 'psalms', 'psalm',
-            'proverbs', 'ecclesiastes', 'isaiah', 'jeremiah', 'lamentations', 'ezekiel', 'daniel',
+            'proverbs', 'ecclesiastes', 'ecclesiastes', 'isaiah', 'jeremiah', 'lamentations', 'ezekiel', 'daniel',
             'hosea', 'joel', 'amos', 'obadiah', 'jonah', 'micah', 'nahum', 'habakkuk', 'zephaniah',
             'haggai', 'zechariah', 'malachi', 'matthew', 'mark', 'luke', 'john', 'acts', 'romans',
             'corinthians', 'galatians', 'ephesians', 'philippians', 'colossians', 'thessalonians',
-            'timothy', 'titus', 'philemon', 'hebrews', 'james', 'peter', 'john', 'jude', 'revelation',
-            'gen', 'ex', 'lev', 'num', 'deut', 'josh', 'judg', 'rth', 'sam', 'kgs', 'chr', 'ezr',
-            'neh', 'est', 'jb', 'ps', 'psa', 'prov', 'eccl', 'isa', 'jer', 'lam', 'ezek', 'dan',
-            'hos', 'joel', 'amos', 'obad', 'jon', 'mic', 'nah', 'hab', 'zeph', 'hag', 'zech', 'mal',
-            'matt', 'mk', 'lk', 'jn', 'acts', 'rom', 'cor', 'gal', 'eph', 'phil', 'col', 'thess',
-            'tim', 'titus', 'phlm', 'heb', 'jas', 'pet', '1st', '2nd', '3rd', 'i', 'ii', 'iii'
+            'timothy', 'titus', 'philemon', 'hebrews', 'james', 'peter', 'jude', 'revelation',
+            'gen', 'ex', 'lev', 'num', 'deut', 'josh', 'judg', 'sam', 'kgs', 'chr', 'ezr',
+            'neh', 'est', 'ps', 'psa', 'prov', 'eccl', 'isa', 'jer', 'lam', 'ezek', 'dan',
+            'hos', 'amos', 'obad', 'jon', 'mic', 'nah', 'hab', 'zeph', 'hag', 'zech', 'mal',
+            'matt', 'mat', 'mk', 'lk', 'jn', 'rom', 'cor', 'gal', 'eph', 'phil', 'col', 'thess',
+            'tim', 'phlm', 'heb', 'jas', 'pet', 'rev',
+            # Common misspellings
+            'mathew', 'matthw', 'look', 'joan', 'chaps', 'chapsdos', 'chap'
         ]
         
-        # Build a regex that requires book name + number pattern
-        book_pattern = '|'.join(bible_books)
+        # Contextual indicators that strongly suggest scripture
+        strong_indicators = [
+            r'\b(?:this is a|here is a|the)\s+(?:reading|passage)\s+(?:of|from)',
+            r'\bturn to\b',
+            r'\bopen your bible to\b',
+            r'\blet\'s read\b',
+            r'\bblessed (?:is|are)\b',
+            r'\bin the beginning\b',
+            r'\bfor god so loved\b',
+            r'\bthe lord is\b',
+            r'\bthus (?:saith|says) the lord\b',
+            r'\bverily\b',
+            r'\bbook of\b.*(?:' + '|'.join(bible_books[:20]) + ')',
+            r'\bchapter\s+\d+\s+verse',
+        ]
         
-        # Must have: book name followed by (space or nothing) and then a digit OR number word
-        # This matches: "John 1", "John1", "1 John 1", "John one", "matthew chapter five:three", etc.
-        number_words = 'one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety'
-        pattern = rf'\b({book_pattern})\b\s*(?:chapter\s+)?(?:{number_words}|\d)'
+        has_strong_indicator = any(re.search(pattern, text_lower) for pattern in strong_indicators)
         
-        has_reference_pattern = bool(re.search(pattern, text_lower))
+        # Build pattern for book + number reference
+        book_pattern = '|'.join(re.escape(book) for book in bible_books)
+        number_words = 'one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred'
+        reference_pattern = rf'\b({book_pattern})\b\s*(?:chapter\s+)?(?:{number_words}|\d)'
         
-        if not has_reference_pattern:
-            return False, 0.0, f"No reference pattern found (e.g., 'John 1', 'Matt 5:3')"
+        has_reference_pattern = bool(re.search(reference_pattern, text_lower))
         
-        # STAGE 2: LLM confirmation (only if pattern matched)
+        # If has strong indicator OR reference pattern, proceed to LLM
+        if not (has_strong_indicator or has_reference_pattern):
+            # Last chance: use LLM for content that might be scripture text
+            # Check for biblical language patterns
+            biblical_words = [
+                'blessed', 'lord', 'god', 'jesus', 'christ', 'holy', 'spirit',
+                'father', 'kingdom', 'heaven', 'righteousness', 'mercy', 'grace',
+                'faith', 'salvation', 'covenant', 'testament', 'gospel', 'disciples',
+                'apostle', 'prophet', 'pharisee', 'jerusalem', 'israel', 'zion'
+            ]
+            
+            biblical_word_count = sum(1 for word in biblical_words if word in text_lower)
+            
+            if biblical_word_count < 2:  # Need at least 2 biblical words
+                return False, 0.0, "No scripture indicators found"
+        
+        # Use LLM for intelligent classification
         try:
+            # Improved prompt with multiple classification categories
             candidate_labels = [
-                "This is a Bible verse reference",
-                "This is not a Bible verse reference"
+                "This is a Bible scripture reference or verse being quoted",
+                "This is sermon commentary or casual conversation",
+                "This is an introduction or transition in a sermon"
             ]
             
             result = self.classifier(text, candidate_labels, multi_class=False)
             top_label = result['labels'][0]
             top_score = result['scores'][0]
             
-            is_scripture = top_label == "This is a Bible verse reference"
+            # Scripture is the top category
+            is_scripture = top_label == "This is a Bible scripture reference or verse being quoted"
             
-            if top_score < threshold:
-                return False, top_score, f"Below confidence threshold ({top_score:.2f} < {threshold})"
+            # Boost confidence if we found strong indicators
+            adjusted_score = top_score
+            if has_strong_indicator:
+                adjusted_score = min(1.0, top_score * 1.2)  # 20% boost
             
-            explanation = f"Pattern ✓ → LLM confirmed (confidence: {top_score:.2f})"
-            return is_scripture, top_score, explanation
+            if adjusted_score < threshold:
+                return False, adjusted_score, f"Below threshold ({adjusted_score:.2f} < {threshold})"
+            
+            explanation_parts = []
+            if has_strong_indicator:
+                explanation_parts.append("Strong contextual cues")
+            if has_reference_pattern:
+                explanation_parts.append("Reference pattern found")
+            explanation_parts.append(f"LLM confidence: {adjusted_score:.2f}")
+            
+            explanation = " + ".join(explanation_parts)
+            return is_scripture, adjusted_score, explanation
         
         except Exception as e:
             print(f"Classification error: {e}")
@@ -179,9 +237,9 @@ class ScriptureClassifier:
             'matthew': ['matthew', 'matt', 'mat', 'mathew', 'matt.', 'matte', 'matthw'],
             'mark': ['mark', 'mk', 'marc'],
             'luke': ['luke', 'lk', 'look', 'lute'],
-            'john': ['john', 'jn', 'jon'],
+            'john': ['john', 'jn', 'jon', 'joan'],
             'acts': ['acts', 'act'],
-            'romans': ['romans', 'rom'],
+            'romans': ['romans', 'rom', 'roman', "roman's", "romans'"],
             '1 corinthians': ['1 corinthians', '1st corinthians', '1 cor', '1cor'],
             '2 corinthians': ['2 corinthians', '2nd corinthians', '2 cor', '2cor'],
             'galatians': ['galatians', 'gal'],
@@ -280,12 +338,12 @@ class ScriptureClassifier:
 # Global instance
 classifier = ScriptureClassifier(use_gpu=True)
 
-def is_scripture(text: str, threshold: float = 0.7) -> bool:
+def is_scripture(text: str, threshold: float = 0.5) -> bool:
     """Check if text is a scripture reference"""
     is_ref, _, _ = classifier.is_scripture_reference(text, threshold)
     return is_ref
 
-def classify_text(text: str, threshold: float = 0.7) -> dict:
+def classify_text(text: str, threshold: float = 0.5) -> dict:
     """
     Classify text and return detailed results.
     Includes transcription correction for common book name errors.
@@ -316,21 +374,41 @@ def classify_text(text: str, threshold: float = 0.7) -> dict:
 
 
 if __name__ == "__main__":
-    # Quick test
+    # Comprehensive test cases covering references and actual scripture
     test_cases = [
+        # Explicit references
         "Luke 1",
         "John 3:16",
-        "Many have undertaken to draw up an account",
         "Matthew chapter 5",
         "Psalm 23",
-        "I'm gonna go to the next one",
         "Genesis 1:1 in the beginning",
+        "This is a reading of the Chaps do's 1-4-1",
+        "Turn to Romans 8:28",
+        
+        # Actual scripture being read
+        "Blessed is the man who doesn't walk in the council",
+        "Blessed is the man who doesn't walk in the council left the wicked",
+        "In the beginning God created the heavens and the earth",
+        "For God so loved the world that he gave his only begotten son",
+        "The Lord is my shepherd I shall not want",
+        
+        # Non-scripture (should be rejected)
+        "Alright, but what is electricity?",
+        "Welcome to the Hard Guy Playcast",
+        "I hope you know you're everybody",
+        "Don't you just love it don't you",
+        "I'm gonna go to the next one",
+        "Many have undertaken to draw up an account",  # Could be borderline
     ]
     
+    print("SCRIPTURE CLASSIFICATION TEST")
+    print("=" * 80)
     for text in test_cases:
         result = classify_text(text)
-        print(f"\nText: {text}")
-        print(f"  Is Scripture: {result['is_scripture']}")
+        status = "SCRIPTURE" if result['is_scripture'] else "NON-SCRIPTURE"
+        print(f"\n[{status}] {text[:60]}..." if len(text) > 60 else f"\n[{status}] {text}")
         print(f"  Confidence: {result['confidence']:.2f}")
         print(f"  Explanation: {result['explanation']}")
-        print(f"  Cleaned: {result['cleaned']}")
+        if result['is_scripture']:
+            print(f"  Cleaned: {result['cleaned']}")
+    print("\n" + "=" * 80)

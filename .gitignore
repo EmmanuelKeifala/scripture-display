@@ -16,4 +16,14 @@ build/
 .vscode/
 .idea/
 
+# Debian packaging artifacts
+debian/.debhelper/
+debian/files
+debian/scripture-display/
+*.deb
+*.dsc
+*.tar.xz
+*.tar.gz
+*.changes
+
 *.md
