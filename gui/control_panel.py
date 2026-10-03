@@ -2,6 +2,8 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext
 
 class ControlPanel:
+    DEFAULT_SOURCE = "System default"
+    
     def __init__(self, root):
         self.root = root
         self.root.title("Scripture Display - Control Panel")
@@ -14,6 +16,8 @@ class ControlPanel:
         self.on_clear_callback = None
         self.on_toggle_display_callback = None
         self.on_detect_callback = None
+        self.on_source_callback = None
+        self.list_sources_callback = None
         
         self._build_ui()
     
@@ -84,6 +88,20 @@ class ControlPanel:
             length=150
         )
         confidence_scale.grid(row=2, column=1, sticky=tk.W, pady=5, padx=5)
+        
+        tk.Label(settings_frame, text="Audio source:").grid(row=3, column=0, sticky=tk.W, pady=5)
+        self.source_var = tk.StringVar(value=self.DEFAULT_SOURCE)
+        self.source_combo = ttk.Combobox(
+            settings_frame,
+            textvariable=self.source_var,
+            values=[self.DEFAULT_SOURCE],
+            state="readonly",
+            width=55,
+            # Re-read the attached devices each time the list is opened
+            postcommand=self._refresh_sources
+        )
+        self.source_combo.grid(row=3, column=1, sticky=tk.W, pady=5, padx=5)
+        self.source_combo.bind("<<ComboboxSelected>>", self._on_source_selected)
         
         manual_frame = tk.LabelFrame(main_frame, text="Manual Verse Input", padx=10, pady=10)
         manual_frame.pack(fill=tk.X, pady=(0, 10))
@@ -167,6 +185,15 @@ class ControlPanel:
         
         self.log_status("System ready. Click 'Start Listening' to begin.")
     
+    def _refresh_sources(self):
+        self._sources = self.list_sources_callback() if self.list_sources_callback else {}
+        self.source_combo['values'] = [self.DEFAULT_SOURCE] + list(self._sources)
+    
+    def _on_source_selected(self, event=None):
+        if self.on_source_callback:
+            label = self.source_var.get()
+            self.on_source_callback(label, self._sources.get(label))
+    
     def _on_start(self):
         if self.on_start_callback:
             self.on_start_callback()
@@ -213,6 +240,7 @@ class ControlPanel:
             self.stop_button.config(state=tk.DISABLED)
     
     def log_status(self, message):
+        print(message)
         self.status_text.config(state=tk.NORMAL)
         self.status_text.insert(tk.END, f"{message}\n")
         self.status_text.see(tk.END)

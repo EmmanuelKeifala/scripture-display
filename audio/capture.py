@@ -1,131 +1,147 @@
-import sounddevice as sd
+import collections
+import json
+import os
+import subprocess
+from typing import Callable, Dict, Optional, Union
+
 import numpy as np
-import queue
-import threading
-from typing import Callable, Optional
-from audio.vad import AdvancedVAD
+import sounddevice as sd
+import webrtcvad
+
+FRAME_MS = 30  # webrtcvad only accepts 10/20/30ms frames
+
+
+def list_sources() -> Dict[str, Union[str, int]]:
+    """Attached audio inputs as {label: source}, for AudioCapture.set_source().
+
+    On PipeWire the source is a node name (every mic, USB sound card and line-in
+    the desktop knows about); elsewhere it is a sounddevice input index.
+    """
+    try:
+        dump = subprocess.run(["pw-dump"], capture_output=True, text=True, timeout=3, check=True).stdout
+        props = [node.get("info", {}).get("props", {}) for node in json.loads(dump)]
+        return {p.get("node.description") or p["node.name"]: p["node.name"]
+                for p in props if p.get("media.class", "").startswith("Audio/Source")}
+    except (OSError, subprocess.SubprocessError, ValueError):
+        # ponytail: raw devices are opened at 16kHz as-is; add resampling if one refuses that rate
+        return {d["name"]: i for i, d in enumerate(sd.query_devices()) if d["max_input_channels"] > 0}
+
 
 class AudioCapture:
-    def __init__(self, sample_rate: int = 16000, channels: int = 1, 
-                 chunk_duration: float = 1.5, callback: Optional[Callable] = None,
-                 use_vad: bool = True, vad_threshold: float = 0.4):
-        self.sample_rate = sample_rate
-        self.channels = channels
-        self.chunk_duration = chunk_duration
-        self.chunk_size = int(sample_rate * chunk_duration)
+    """Microphone -> utterances split on silence, via callback(audio, final).
+
+    While someone is still speaking, the last few seconds are also sent every
+    partial_ms with final=False, so a verse can go up before they pause.
+    """
+
+    def __init__(self, callback: Callable, sample_rate: int = 16000, aggressiveness: int = 2,
+                 silence_ms: int = 600, max_seconds: float = 12, min_speech_ms: int = 240,
+                 partial_ms: int = 1000, partial_window_seconds: float = 6,
+                 status_callback: Optional[Callable] = None,
+                 frame_callback: Optional[Callable] = None):
         self.callback = callback
-        self.use_vad = use_vad
-        
-        self.audio_queue = queue.Queue(maxsize=100)
-        self.is_recording = False
+        self.status_callback = status_callback
+        self.frame_callback = frame_callback  # every 30ms frame as 16-bit PCM bytes
+        self.source = None  # None = system default; see list_sources()
+        self.sample_rate = sample_rate
+        self.frame_size = sample_rate * FRAME_MS // 1000
+        # Tuning knobs: raise aggressiveness (0-3) in a noisy room, raise
+        # silence_ms if a slow speaker gets cut mid-reference.
+        self.vad = webrtcvad.Vad(aggressiveness)
+        self.silence_frames = silence_ms // FRAME_MS
+        self.max_frames = int(max_seconds * 1000) // FRAME_MS
+        self.min_speech_frames = min_speech_ms // FRAME_MS
+        self.partial_frames = partial_ms // FRAME_MS
+        self.partial_window = int(partial_window_seconds * sample_rate)
         self.stream = None
-        self.buffer = []
-        
-        self.vad = AdvancedVAD(sample_rate=sample_rate, threshold=vad_threshold) if use_vad else None
-        self.speech_buffer = []
-        self.silence_duration = 0
-        self.max_silence_chunks = 2
-        
+        self._reset()
+
+    def _reset(self):
+        self._preroll = collections.deque(maxlen=10)  # 300ms kept from before speech starts
+        self._frames = []
+        self._speech = 0
+        self._silence = 0
+        self._dc = None
+        self._dead_frames = 0
+
     def _audio_callback(self, indata, frames, time, status):
         if status:
             print(f"Audio status: {status}")
-        
-        if self.is_recording:
-            audio_data = indata.copy().flatten()
-            self.buffer.extend(audio_data)
-            
-            if len(self.buffer) >= self.chunk_size:
-                chunk = np.array(self.buffer[:self.chunk_size], dtype=np.float32)
-                self.buffer = self.buffer[self.chunk_size:]
-                
-                if self.use_vad and self.vad:
-                    if self.vad.is_speech(chunk):
-                        self.speech_buffer.extend(chunk)
-                        self.silence_duration = 0
-                    else:
-                        self.silence_duration += 1
-                        
-                        if len(self.speech_buffer) > 0:
-                            self.speech_buffer.extend(chunk)
-                    
-                    if len(self.speech_buffer) >= self.chunk_size or \
-                       (len(self.speech_buffer) > 0 and self.silence_duration >= self.max_silence_chunks):
-                        
-                        speech_chunk = np.array(self.speech_buffer[:self.chunk_size], dtype=np.float32)
-                        self.speech_buffer = self.speech_buffer[self.chunk_size:] if len(self.speech_buffer) > self.chunk_size else []
-                        
-                        if self.callback:
-                            self.callback(speech_chunk)
-                        else:
-                            try:
-                                self.audio_queue.put_nowait(speech_chunk)
-                            except queue.Full:
-                                pass
-                        
-                        if self.silence_duration >= self.max_silence_chunks:
-                            self.speech_buffer = []
-                            self.silence_duration = 0
-                else:
-                    if self.callback:
-                        self.callback(chunk)
-                    else:
-                        try:
-                            self.audio_queue.put_nowait(chunk)
-                        except queue.Full:
-                            pass
-    
-    def start(self):
-        if self.is_recording:
+        if len(indata) != self.frame_size:
             return
-        
-        self.is_recording = True
-        self.buffer = []
-        self.speech_buffer = []
-        self.silence_duration = 0
-        
+
+        # A muted mic delivers exact zeros; say so once instead of sitting there deaf
+        self._dead_frames = 0 if indata.any() else self._dead_frames + 1
+        if self._dead_frames == 3000 // FRAME_MS and self.status_callback:
+            self.status_callback("Microphone is completely silent - is it muted?")
+
+        # Some laptop mics sit on a large constant offset that drowns the speech;
+        # track it slowly and subtract it.
+        mean = float(indata.mean())
+        self._dc = mean if self._dc is None else 0.95 * self._dc + 0.05 * mean
+        frame = indata[:, 0] - self._dc
+        pcm = (np.clip(frame, -1, 1) * 32767).astype(np.int16).tobytes()
+        if self.frame_callback:
+            self.frame_callback(pcm)
+        is_speech = self.vad.is_speech(pcm, self.sample_rate)
+
+        if not self._frames:
+            self._preroll.append(frame)
+            if not is_speech:
+                return
+            self._frames = list(self._preroll)
+            self._preroll.clear()
+        else:
+            self._frames.append(frame)
+
+        if is_speech:
+            self._speech += 1
+            self._silence = 0
+        else:
+            self._silence += 1
+
+        if self._silence >= self.silence_frames or len(self._frames) >= self.max_frames:
+            if self._speech >= self.min_speech_frames:
+                self.callback(np.concatenate(self._frames), True)
+            self._frames = []
+            self._speech = 0
+            self._silence = 0
+        elif len(self._frames) % self.partial_frames == 0 and self._speech >= self.min_speech_frames:
+            self.callback(np.concatenate(self._frames)[-self.partial_window:], False)
+
+    def start(self):
+        if self.stream:
+            return
+        self._reset()
+        device = self.source
+        if isinstance(self.source, str):
+            # pipewire-alsa reads the target node from the environment when the stream opens
+            os.environ["PIPEWIRE_NODE"] = self.source
+            device = "pipewire"
+        else:
+            os.environ.pop("PIPEWIRE_NODE", None)
         self.stream = sd.InputStream(
+            device=device,
             samplerate=self.sample_rate,
-            channels=self.channels,
-            callback=self._audio_callback,
-            blocksize=512,
+            channels=1,
             dtype='float32',
-            latency='low'
+            blocksize=self.frame_size,
+            callback=self._audio_callback,
         )
         self.stream.start()
-        vad_status = "with VAD" if self.use_vad else "without VAD"
-        print(f"Audio capture started: {self.sample_rate}Hz, {self.chunk_duration}s chunks {vad_status}")
-    
-    def stop(self):
-        if not self.is_recording:
-            return
-        
-        self.is_recording = False
-        
+        print(f"Audio capture started: {self.sample_rate}Hz, splitting on silence")
+
+    def set_source(self, source):
+        """Switch input; takes effect immediately if already listening."""
+        self.source = source
         if self.stream:
-            self.stream.stop()
-            self.stream.close()
-            self.stream = None
-        
-        self.buffer = []
-        self.speech_buffer = []
-        self.silence_duration = 0
+            self.stop()
+            self.start()
+
+    def stop(self):
+        if not self.stream:
+            return
+        self.stream.stop()
+        self.stream.close()
+        self.stream = None
         print("Audio capture stopped")
-    
-    def get_chunk(self, timeout: float = 1.0) -> Optional[np.ndarray]:
-        try:
-            return self.audio_queue.get(timeout=timeout)
-        except queue.Empty:
-            return None
-    
-    def clear_queue(self):
-        while not self.audio_queue.empty():
-            try:
-                self.audio_queue.get_nowait()
-            except queue.Empty:
-                break
-    
-    def set_callback(self, callback: Callable):
-        self.callback = callback
-    
-    def is_active(self) -> bool:
-        return self.is_recording

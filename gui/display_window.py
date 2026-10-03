@@ -9,6 +9,8 @@ class DisplayWindow:
         
         self.window.attributes('-fullscreen', False)
         self.window.geometry("800x600")
+        # Closing the window must only hide it; destroying it breaks every later display
+        self.window.protocol("WM_DELETE_WINDOW", self.hide)
         
         self.reference_label = tk.Label(
             self.window,
