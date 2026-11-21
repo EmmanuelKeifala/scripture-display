@@ -2,6 +2,7 @@ import threading
 import tkinter as tk
 from gui.control_panel import ControlPanel
 from gui.display_window import DisplayWindow
+from gui.monitors import enable_dpi_awareness, list_monitors
 from scripture.lookup import ScriptureLookup
 from scripture.detector import ScriptureDetector
 from audio.capture import list_sources
@@ -9,6 +10,8 @@ from audio.processor import AudioProcessor
 
 class ScriptureDisplayApp:
     def __init__(self):
+        # Before Tk starts, or Windows reports wrong monitor positions with mixed scaling
+        enable_dpi_awareness()
         self.root = tk.Tk()
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
@@ -25,6 +28,7 @@ class ScriptureDisplayApp:
         
         # Set the advance callback for auto-advance on auto-clear
         self.display_window.on_advance_callback = self.advance_to_next_verse
+        self.display_window.auto_advance_enabled = self.control_panel.is_auto_advance_enabled
         
         self.control_panel.on_start_callback = self.start_listening
         self.control_panel.on_stop_callback = self.stop_listening
@@ -34,6 +38,10 @@ class ScriptureDisplayApp:
         self.control_panel.on_detect_callback = self.process_transcription
         self.control_panel.list_sources_callback = list_sources
         self.control_panel.on_source_callback = self.set_audio_source
+        self.control_panel.on_fullscreen_callback = self.fullscreen_display
+        self.control_panel.list_screens_callback = lambda: list_monitors(self.root)
+        self.control_panel.on_screen_callback = self.move_display_to_screen
+        self.control_panel.refresh_screens()
         
         self._load_translations()
         
@@ -218,6 +226,22 @@ class ScriptureDisplayApp:
             self.display_window.show()
             self.control_panel.log_status("Display window shown")
     
+    def fullscreen_display(self):
+        if self.display_window.is_fullscreen():
+            self.display_window.exit_fullscreen()
+            self.control_panel.log_status("Display fullscreen off")
+            return
+        monitor = self.control_panel.get_selected_screen()
+        self.display_window.show()
+        self.display_window.enter_fullscreen(monitor)
+        where = monitor.label if monitor else "current screen"
+        self.control_panel.log_status(f"Display fullscreen on {where} (Esc on the display exits)")
+
+    def move_display_to_screen(self, monitor):
+        self.display_window.show()
+        self.display_window.move_to_monitor(monitor)
+        self.control_panel.log_status(f"Display moved to {monitor.label}")
+
     def on_closing(self):
         self.control_panel.log_status("Shutting down...")
         if self.audio_processor.is_active():
