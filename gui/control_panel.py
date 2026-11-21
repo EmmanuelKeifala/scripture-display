@@ -2,11 +2,15 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext
 
 class ControlPanel:
+    DEFAULT_SOURCE = "System default"
+    
     def __init__(self, root):
         self.root = root
         self.root.title("Scripture Display - Control Panel")
-        self.root.geometry("700x750")
-        
+        # The app is DPI-aware, so scale the window with the screen's scaling (150% etc.)
+        dpi_scale = max(1.0, self.root.winfo_fpixels('1i') / 96)
+        self.root.geometry(f"{int(760 * dpi_scale)}x{int(800 * dpi_scale)}")
+
         self.is_listening = False
         self.on_start_callback = None
         self.on_stop_callback = None
@@ -14,7 +18,13 @@ class ControlPanel:
         self.on_clear_callback = None
         self.on_toggle_display_callback = None
         self.on_detect_callback = None
-        
+        self.on_source_callback = None
+        self.list_sources_callback = None
+        self.on_fullscreen_callback = None
+        self.list_screens_callback = None   # returns list of Monitor
+        self.on_screen_callback = None      # called with the chosen Monitor
+        self._screens = {}
+
         self._build_ui()
     
     def _build_ui(self):
@@ -61,16 +71,27 @@ class ControlPanel:
         )
         self.translation_combo.grid(row=0, column=1, sticky=tk.W, pady=5, padx=5)
         
-        tk.Label(settings_frame, text="Auto-clear (seconds):").grid(row=1, column=0, sticky=tk.W, pady=5)
+        tk.Label(settings_frame, text="Advance/clear after (s, 0 = never):").grid(row=1, column=0, sticky=tk.W, pady=5)
         self.auto_clear_var = tk.StringVar(value="10")
         auto_clear_spin = tk.Spinbox(
             settings_frame,
-            from_=5,
-            to=60,
+            from_=0,
+            to=300,
             textvariable=self.auto_clear_var,
             width=17
         )
         auto_clear_spin.grid(row=1, column=1, sticky=tk.W, pady=5, padx=5)
+
+        self.auto_advance_var = tk.BooleanVar(value=True)
+        self.auto_advance_button = tk.Button(
+            settings_frame,
+            command=self._toggle_auto_advance,
+            font=('Arial', 9, 'bold'),
+            fg='white',
+            width=20
+        )
+        self.auto_advance_button.grid(row=1, column=2, sticky=tk.W, pady=5, padx=5)
+        self._update_auto_advance_button()
         
         tk.Label(settings_frame, text="Detection Confidence:").grid(row=2, column=0, sticky=tk.W, pady=5)
         self.confidence_var = tk.DoubleVar(value=0.7)
@@ -85,6 +106,33 @@ class ControlPanel:
         )
         confidence_scale.grid(row=2, column=1, sticky=tk.W, pady=5, padx=5)
         
+        tk.Label(settings_frame, text="Audio source:").grid(row=3, column=0, sticky=tk.W, pady=5)
+        self.source_var = tk.StringVar(value=self.DEFAULT_SOURCE)
+        self.source_combo = ttk.Combobox(
+            settings_frame,
+            textvariable=self.source_var,
+            values=[self.DEFAULT_SOURCE],
+            state="readonly",
+            width=50,
+            # Re-read the attached devices each time the list is opened
+            postcommand=self._refresh_sources
+        )
+        self.source_combo.grid(row=3, column=1, columnspan=2, sticky=tk.W, pady=5, padx=5)
+        self.source_combo.bind("<<ComboboxSelected>>", self._on_source_selected)
+
+        tk.Label(settings_frame, text="Display screen:").grid(row=4, column=0, sticky=tk.W, pady=5)
+        self.screen_var = tk.StringVar()
+        self.screen_combo = ttk.Combobox(
+            settings_frame,
+            textvariable=self.screen_var,
+            state="readonly",
+            width=30,
+            # Re-read monitors each time, so a projector plugged in later shows up
+            postcommand=self.refresh_screens
+        )
+        self.screen_combo.grid(row=4, column=1, sticky=tk.W, pady=5, padx=5)
+        self.screen_combo.bind("<<ComboboxSelected>>", self._on_screen_selected)
+
         manual_frame = tk.LabelFrame(main_frame, text="Manual Verse Input", padx=10, pady=10)
         manual_frame.pack(fill=tk.X, pady=(0, 10))
         
@@ -135,6 +183,13 @@ class ControlPanel:
             command=self._on_toggle_display,
             font=('Arial', 10)
         ).pack(side=tk.LEFT, padx=5)
+
+        tk.Button(
+            button_row,
+            text="Fullscreen On/Off",
+            command=self._on_fullscreen,
+            font=('Arial', 10)
+        ).pack(side=tk.LEFT, padx=5)
         
         test_frame = tk.LabelFrame(main_frame, text="Test Scripture Detection", padx=10, pady=10)
         test_frame.pack(fill=tk.X, pady=(0, 10))
@@ -167,6 +222,35 @@ class ControlPanel:
         
         self.log_status("System ready. Click 'Start Listening' to begin.")
     
+    def _refresh_sources(self):
+        self._sources = self.list_sources_callback() if self.list_sources_callback else {}
+        self.source_combo['values'] = [self.DEFAULT_SOURCE] + list(self._sources)
+    
+    def refresh_screens(self):
+        monitors = self.list_screens_callback() if self.list_screens_callback else []
+        self._screens = {m.label: m for m in monitors}
+        labels = list(self._screens)
+        self.screen_combo['values'] = labels
+        if labels and self.screen_var.get() not in self._screens:
+            # Default to the first non-main screen: usually the projector
+            secondary = [m.label for m in monitors if not m.primary]
+            self.screen_var.set(secondary[0] if secondary else labels[0])
+
+    def get_selected_screen(self):
+        if not self._screens:
+            self.refresh_screens()
+        return self._screens.get(self.screen_var.get())
+
+    def _on_screen_selected(self, event=None):
+        monitor = self.get_selected_screen()
+        if monitor and self.on_screen_callback:
+            self.on_screen_callback(monitor)
+
+    def _on_source_selected(self, event=None):
+        if self.on_source_callback:
+            label = self.source_var.get()
+            self.on_source_callback(label, self._sources.get(label))
+    
     def _on_start(self):
         if self.on_start_callback:
             self.on_start_callback()
@@ -195,6 +279,25 @@ class ControlPanel:
         if self.on_toggle_display_callback:
             self.on_toggle_display_callback()
     
+    def _on_fullscreen(self):
+        if self.on_fullscreen_callback:
+            self.on_fullscreen_callback()
+
+    def _toggle_auto_advance(self):
+        self.auto_advance_var.set(not self.auto_advance_var.get())
+        self._update_auto_advance_button()
+        state = "ON" if self.auto_advance_var.get() else "OFF"
+        self.log_status(f"Auto-advance to next verse: {state}")
+
+    def _update_auto_advance_button(self):
+        if self.auto_advance_var.get():
+            self.auto_advance_button.config(text="Auto-advance: ON", bg='green', activebackground='dark green')
+        else:
+            self.auto_advance_button.config(text="Auto-advance: OFF", bg='gray', activebackground='dim gray')
+
+    def is_auto_advance_enabled(self):
+        return self.auto_advance_var.get()
+
     def _on_detect(self):
         if self.on_detect_callback:
             text = self.test_text.get(1.0, tk.END).strip()
@@ -213,6 +316,7 @@ class ControlPanel:
             self.stop_button.config(state=tk.DISABLED)
     
     def log_status(self, message):
+        print(message)
         self.status_text.config(state=tk.NORMAL)
         self.status_text.insert(tk.END, f"{message}\n")
         self.status_text.see(tk.END)
@@ -220,7 +324,7 @@ class ControlPanel:
     
     def get_auto_clear_seconds(self):
         try:
-            return int(self.auto_clear_var.get())
+            return max(0, int(self.auto_clear_var.get()))
         except ValueError:
             return 10
     

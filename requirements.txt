@@ -1,6 +1,7 @@
 faster-whisper
-soundfile
 sounddevice
 numpy
 requests
 webrtcvad
+setuptools<81
+websocket-client

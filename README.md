@@ -43,7 +43,7 @@ Enter verse ranges like "1-3" to display multiple verses (e.g., Psalm 23:1-3)
 
 ### Controls
 
-- **Start Listening**: Begin audio processing (not yet implemented)
+- **Start Listening**: Begin audio processing
 - **Stop Listening**: Stop audio processing
 - **Display Verse**: Manually display a verse
 - **Clear Display**: Remove current verse from display
@@ -93,9 +93,9 @@ whisper/
 │   ├── control_panel.py  # Control interface
 │   └── display_window.py # Scripture display
 ├── audio/
-│   ├── capture.py        # Real-time microphone capture
+│   ├── capture.py        # Microphone capture, split into utterances on silence
 │   ├── transcribe.py     # Whisper speech-to-text
-│   └── processor.py      # Audio processing pipeline
+│   └── processor.py      # Wires capture to transcription
 ├── scripture/
 │   ├── database.py       # DB management
 │   ├── lookup.py         # Verse queries
@@ -108,9 +108,9 @@ whisper/
 
 ## How It Works
 
-1. **Audio Capture**: Microphone input is captured in 3-second chunks at 16kHz
-2. **Speech Recognition**: Whisper AI transcribes the audio to text
-3. **Scripture Detection**: Text is analyzed for Bible references using regex patterns
+1. **Audio Capture**: Microphone input is split into whole utterances on silence (webrtcvad), up to 12 seconds each
+2. **Speech Recognition**: Whisper (faster-whisper, `small.en` model) transcribes each utterance, plus a live guess every second while someone is still speaking; everything heard is shown in the Status Log
+3. **Scripture Detection**: The transcript is matched for Bible references, written ("John 3:16") or spoken ("John chapter three verse sixteen", "John three sixteen")
 4. **Verse Lookup**: Detected references are fetched from the local database
 5. **Display**: Verses are shown on the display window with auto-clear timer
 
@@ -136,25 +136,18 @@ Then speak into your microphone:
 - "Turn to Matthew 5:1-10"
 - "First Corinthians 13:4-7"
 
-## Whisper Model Sizes
+## Cloud transcription (optional)
 
-The system uses Whisper 'small' model by default for better accuracy. Available models:
+With a Deepgram API key the microphone is streamed to Deepgram (faster and more accurate than the local model); without one, or whenever the internet drops, the local Whisper model is used. Provide the key either way:
 
-- **tiny**: Fastest, less accurate (39M params) - ~1GB RAM
-- **base**: Fast, balanced (74M params) - ~1GB RAM
-- **small**: Good accuracy, moderate speed (244M params) - ~2GB RAM (DEFAULT)
-- **medium**: High accuracy, slower (769M params) - ~5GB RAM
-- **large**: Best accuracy, slowest (1550M params) - ~10GB RAM
+- environment variable `DEEPGRAM_API_KEY`, or
+- a file named `.deepgram_key` in the project folder containing only the key (it is gitignored)
 
-The 'small' model provides the best balance of speed and accuracy for scripture references.
+## Tuning
 
-## Optimization Features
-
-- **Initial Prompt**: Guides Whisper with Bible verse examples for better context
-- **5-second Chunks**: Allows complete verse references to be captured
-- **No Speech Threshold**: Filters out background noise (0.6 threshold)
-- **Beam Search**: Uses beam_size=5 for better transcription quality
-- **Temperature 0**: Deterministic output for consistent results
+- **Model size**: `model_size` in `app.py` (`small.en` by default, about 2s behind live on a laptop CPU; `base.en` is about 1s behind but less accurate)
+- **Noisy room / cut-off references**: `aggressiveness` and `silence_ms` in `audio/capture.py`
+- **False detections**: raise the Detection Confidence slider. A bare "Book N" only shows at 0.6 or lower, except Psalms
 
 ## License
 

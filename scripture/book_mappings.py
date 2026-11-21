@@ -20,7 +20,7 @@ BOOK_NAMES = {
     'Psalms': ['Psalms', 'Psalm', 'Ps', 'Pslm', 'Psa', 'Psm', 'Pss'],
     'Proverbs': ['Proverbs', 'Prov', 'Pr', 'Prv'],
     'Ecclesiastes': ['Ecclesiastes', 'Eccles', 'Eccle', 'Ecc', 'Ec', 'Qoh'],
-    'Song of Solomon': ['Song of Solomon', 'Song', 'Song of Songs', 'SOS', 'Canticle of Canticles', 'Canticles', 'Cant'],
+    'Song of Solomon': ['Song of Solomon', 'Songs of Solomon', 'Song', 'Song of Songs', 'SOS', 'Canticle of Canticles', 'Canticles', 'Cant'],
     'Isaiah': ['Isaiah', 'Isa', 'Is'],
     'Jeremiah': ['Jeremiah', 'Jer', 'Je', 'Jr'],
     'Lamentations': ['Lamentations', 'Lam', 'La'],
@@ -64,7 +64,7 @@ BOOK_NAMES = {
     '2 John': ['2 John', '2 Jn', '2 Jhn', '2Jn', '2J', '2John', 'II John', 'Second John'],
     '3 John': ['3 John', '3 Jn', '3 Jhn', '3Jn', '3J', '3John', 'III John', 'Third John'],
     'Jude': ['Jude', 'Jud', 'Jd'],
-    'Revelation': ['Revelation', 'Rev', 'Re', 'The Revelation'],
+    'Revelation': ['Revelation', 'Revelations', 'Rev', 'Re', 'The Revelation'],
 }
 
 SPOKEN_NUMBERS = {

@@ -58,5 +58,55 @@ def test_detector():
     print("\n" + "=" * 70)
     print("Tests complete!")
 
+def check_detector():
+    detector = ScriptureDetector(confidence_threshold=0.7)
+    
+    def found(text):
+        return [(r.book, r.chapter, r.start_verse, r.end_verse) for r in detector.detect(text)]
+    
+    cases = {
+        "Turn to Matthew 5:1-10 for the Beatitudes.": [('Matthew', 5, 1, 10)],
+        "First Corinthians chapter 13 verses 4 through 7 describes love.": [('1 Corinthians', 13, 4, 7)],
+        "The prophet Isaiah in chapter 40 verse 31 gives us hope.": [('Isaiah', 40, 31, 31)],
+        "Look at Rev 21:4 where it talks about no more tears.": [('Revelation', 21, 4, 4)],
+        "John 3:16 and also Romans 5:8": [('John', 3, 16, 16), ('Romans', 5, 8, 8)],
+        # How Whisper writes spoken references
+        "John three sixteen": [('John', 3, 16, 16)],
+        "John 3.16": [('John', 3, 16, 16)],
+        "John 3, 16": [('John', 3, 16, 16)],
+        "John 316": [('John', 3, 16, 16)],
+        "John chapter three, verse sixteen": [('John', 3, 16, 16)],
+        "Second Timothy chapter three verse sixteen to seventeen": [('2 Timothy', 3, 16, 17)],
+        "Romans eight twenty-eight": [('Romans', 8, 28, 28)],
+        "Psalm one hundred nineteen verse one hundred and five": [('Psalms', 119, 105, 105)],
+        "Psalm 23": [('Psalms', 23, 1, 1)],
+        "the book of Genesis, chapter 1": [('Genesis', 1, 1, 1)],
+        # Ordinary speech must not trigger
+        "there is 1 thing I am 16 years old": [],
+        "Mark one day he said to me": [],
+        "we will be doing it speaking the whole": [],
+    }
+    cases.update({
+        # Misheard book names, only in front of an unmistakable reference
+        "Collisions chapter 3 verse 2": [('Colossians', 3, 2, 2)],
+        "Habacuc 2:4": [('Habakkuk', 2, 4, 4)],
+        "Revelations 21 4": [('Revelation', 21, 4, 4)],
+        "section chapter 3 verse 2 of the manual": [],
+    })
+    for text, expected in cases.items():
+        assert found(text) == expected, f"{text!r}: got {found(text)}, expected {expected}"
+    
+    # A live partial transcript may end mid-number
+    assert detector.detect("turn to John 3:1", allow_trailing=False) == []
+    assert len(detector.detect("turn to John 3:16 and read", allow_trailing=False)) == 1
+    
+    followup = [(r.book, r.chapter, r.start_verse, r.end_verse)
+                for r in detector.detect_followup("now look at verse seventeen", 'John', 3)]
+    assert followup == [('John', 3, 17, 17)], followup
+    assert detector.detect_followup("nothing here", 'John', 3) == []
+    
+    print(f"All {len(cases) + 4} detector checks passed")
+
 if __name__ == "__main__":
     test_detector()
+    check_detector()

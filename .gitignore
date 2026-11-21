@@ -27,3 +27,4 @@ debian/scripture-display/
 *.changes
 
 *.md
+.deepgram_key
